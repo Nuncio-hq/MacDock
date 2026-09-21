@@ -9,26 +9,47 @@ struct MonitorModule: DockModule {
 
 struct MonitorView: View {
     @StateObject private var stats = SystemStatsService()
+    @State private var showAnalyzer = false
 
     var body: some View {
-        List {
-            GaugeRow(title: "CPU", value: stats.snapshot.cpuUsage,
-                     detail: String(format: "%.0f%%", stats.snapshot.cpuUsage * 100))
-            GaugeRow(title: "Memory",
-                     value: ratio(stats.snapshot.memoryUsed, stats.snapshot.memoryTotal),
-                     detail: "\(fmtBytes(stats.snapshot.memoryUsed)) / \(fmtBytes(stats.snapshot.memoryTotal))")
-            GaugeRow(title: "Disk",
-                     value: ratio(stats.snapshot.diskUsed, stats.snapshot.diskTotal),
-                     detail: "\(fmtBytes(stats.snapshot.diskTotal - stats.snapshot.diskUsed)) free")
-            LabeledContent("Network ↓",
-                           value: "\(fmtBytes(UInt64(max(0, stats.snapshot.netBytesInPerSec))))/s")
-            LabeledContent("Network ↑",
-                           value: "\(fmtBytes(UInt64(max(0, stats.snapshot.netBytesOutPerSec))))/s")
+        if showAnalyzer {
+            VStack(spacing: 0) {
+                HStack {
+                    Button { showAnalyzer = false } label: {
+                        Label("Stats", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Color.accentTeal)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                DiskAnalyzerView()
+            }
+        } else {
+            List {
+                GaugeRow(title: "CPU", value: stats.snapshot.cpuUsage,
+                         detail: String(format: "%.0f%%", stats.snapshot.cpuUsage * 100))
+                GaugeRow(title: "Memory",
+                         value: ratio(stats.snapshot.memoryUsed, stats.snapshot.memoryTotal),
+                         detail: "\(fmtBytes(stats.snapshot.memoryUsed)) / \(fmtBytes(stats.snapshot.memoryTotal))")
+                GaugeRow(title: "Disk",
+                         value: ratio(stats.snapshot.diskUsed, stats.snapshot.diskTotal),
+                         detail: "\(fmtBytes(stats.snapshot.diskTotal - stats.snapshot.diskUsed)) free")
+                LabeledContent("Network ↓",
+                               value: "\(fmtBytes(UInt64(max(0, stats.snapshot.netBytesInPerSec))))/s")
+                LabeledContent("Network ↑",
+                               value: "\(fmtBytes(UInt64(max(0, stats.snapshot.netBytesOutPerSec))))/s")
+                Button { showAnalyzer = true } label: {
+                    Label("Disk Analyzer", systemImage: "internaldrive")
+                        .foregroundStyle(Color.accentTeal)
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .onAppear { stats.start() }
+            .onDisappear { stats.stop() }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .onAppear { stats.start() }
-        .onDisappear { stats.stop() }
     }
 
     private func ratio(_ part: UInt64, _ total: UInt64) -> Double {
