@@ -8,6 +8,7 @@ struct MacDockApp: App {
         MenuBarExtra("MacDock", image: "MenuBarIcon") {
             ContentView()
                 .environmentObject(registry)
+                .tint(Color.accentTeal)
         }
         .menuBarExtraStyle(.window)
 
