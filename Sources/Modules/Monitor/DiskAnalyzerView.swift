@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Well-known locations where space hides that macOS's own storage UI
 /// doesn't surface — caches, developer junk, backups, snapshots.
@@ -158,6 +159,10 @@ final class DiskAnalyzerViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
     }
 
+    func revealPath(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
     func trash(_ node: DiskNode) {
         do {
             try FileManager.default.trashItem(at: URL(fileURLWithPath: node.path),
@@ -165,6 +170,63 @@ final class DiskAnalyzerViewModel: ObservableObject {
             refreshAfterDelete(node)
         } catch {
             self.error = "Couldn't move to Trash: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Staged delete (DaisyDisk-style collector)
+
+    /// collecting: items sit in the bar awaiting the Delete button.
+    /// emptying: truck animation running, commits to Trash when it ends.
+    /// restocking: undo animation running, nothing is deleted.
+    enum CollectorPhase { case collecting, emptying, restocking }
+
+    @Published var staged: [DiskNode] = []
+    @Published var collectorPhase: CollectorPhase = .collecting
+
+    var stagedBytes: UInt64 { staged.reduce(0) { $0 + $1.size } }
+
+    func stage(_ node: DiskNode) {
+        guard collectorPhase == .collecting else { return }
+        guard !staged.contains(where: { $0.id == node.id }) else { return }
+        withAnimation(.spring(response: 0.3)) { staged.append(node) }
+    }
+
+    func unstage(_ node: DiskNode) {
+        withAnimation(.spring(response: 0.3)) {
+            staged.removeAll { $0.id == node.id }
+        }
+    }
+
+    func isStaged(_ node: DiskNode) -> Bool { staged.contains { $0.id == node.id } }
+
+    /// Resolve a dropped drag payload back to a live child of the current dir.
+    func node(withID id: UUID) -> DiskNode? {
+        (current?.children ?? []).first { $0.id == id }
+    }
+
+    /// Garbage-truck run: chips tip into the bin, then everything is trashed.
+    func requestCommit() {
+        guard collectorPhase == .collecting, !staged.isEmpty else { return }
+        collectorPhase = .emptying
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard let self, !Task.isCancelled else { return }
+            let doomed = self.staged
+            self.staged = []
+            self.collectorPhase = .collecting
+            for node in doomed { self.trash(node) }
+        }
+    }
+
+    /// Restock run: chips fly back up into the stack, nothing is deleted.
+    func requestRestore() {
+        guard collectorPhase == .collecting, !staged.isEmpty else { return }
+        collectorPhase = .restocking
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard let self, !Task.isCancelled else { return }
+            self.staged = []
+            self.collectorPhase = .collecting
         }
     }
 
@@ -182,8 +244,27 @@ final class DiskAnalyzerViewModel: ObservableObject {
     }
 }
 
+/// Drag payload for a scanned node — dropped on the delete collector.
+struct DraggedNode: Codable, Transferable {
+    let id: UUID
+    let path: String
+    let name: String
+    let size: UInt64
+    let isDirectory: Bool
+
+    init(_ n: DiskNode) {
+        id = n.id; path = n.path; name = n.name
+        size = n.size; isDirectory = n.isDirectory
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+    }
+}
+
 struct DiskAnalyzerView: View {
     @StateObject private var vm = DiskAnalyzerViewModel()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -237,6 +318,15 @@ struct DiskAnalyzerView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.accentTeal)
+
+            Button {
+                openWindow(id: "storage")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Label("Open Storage Manager", systemImage: "macwindow")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain).foregroundStyle(Color.accentTeal)
 
             spotList
             Spacer()
@@ -323,7 +413,7 @@ struct DiskAnalyzerView: View {
             .onTapGesture { if child.isDirectory { vm.drill(child) } }
             .contextMenu {
                 Button("Reveal in Finder") { vm.reveal(child) }
-                Button("Move to Trash", role: .destructive) { vm.trash(child) }
+                Button("Move to Trash", role: .destructive) { vm.stage(child) }
             }
         }
         .listStyle(.plain)
