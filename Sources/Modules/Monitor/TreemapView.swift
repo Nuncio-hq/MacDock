@@ -38,6 +38,7 @@ struct TreemapView: View {
                                height: max(rect.height - 2, 1))
                         .position(x: rect.midX, y: rect.midY)
                         .contentShape(Rectangle())
+                        .draggable(DraggedNode(node))
                         .onTapGesture { if node.isDirectory { onDrill(node) } }
                         .help("\(node.path)\n\(ByteCountFormatter.string(fromByteCount: Int64(node.size), countStyle: .binary))")
                 }

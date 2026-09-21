@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Well-known locations where space hides that macOS's own storage UI
 /// doesn't surface — caches, developer junk, backups, snapshots.
@@ -172,6 +173,61 @@ final class DiskAnalyzerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Staged delete (DaisyDisk-style collector)
+
+    /// Seconds the user has to change their mind before staged items are trashed.
+    static let deleteCooldown: TimeInterval = 5
+
+    @Published var staged: [DiskNode] = []
+    @Published var deleteCountdown: TimeInterval = 0
+    private var deleteTask: Task<Void, Never>?
+
+    var stagedBytes: UInt64 { staged.reduce(0) { $0 + $1.size } }
+
+    func stage(_ node: DiskNode) {
+        guard !staged.contains(where: { $0.id == node.id }) else { return }
+        staged.append(node)
+        deleteCountdown = Self.deleteCooldown
+        scheduleCommit()
+    }
+
+    func unstage(_ node: DiskNode) {
+        staged.removeAll { $0.id == node.id }
+        if staged.isEmpty { cancelStaged() }
+    }
+
+    func cancelStaged() {
+        deleteTask?.cancel()
+        staged = []
+        deleteCountdown = 0
+    }
+
+    func isStaged(_ node: DiskNode) -> Bool { staged.contains { $0.id == node.id } }
+
+    /// Resolve a dropped drag payload back to a live child of the current dir.
+    func node(withID id: UUID) -> DiskNode? {
+        (current?.children ?? []).first { $0.id == id }
+    }
+
+    private func scheduleCommit() {
+        deleteTask?.cancel()
+        deleteTask = Task { [weak self] in
+            while let self, self.deleteCountdown > 0 {
+                try? await Task.sleep(for: .milliseconds(100))
+                if Task.isCancelled { return }
+                self.deleteCountdown = max(0, self.deleteCountdown - 0.1)
+            }
+            if !Task.isCancelled { self?.commitStaged() }
+        }
+    }
+
+    private func commitStaged() {
+        let doomed = staged
+        staged = []
+        deleteCountdown = 0
+        for node in doomed { trash(node) }
+    }
+
     private func refreshAfterDelete(_ node: DiskNode) {
         guard var root else { return }
         removeFromTree(&root, id: node.id)
@@ -183,6 +239,24 @@ final class DiskAnalyzerViewModel: ObservableObject {
         node.children?.removeAll { $0.id == id }
         node.children?.indices.forEach { removeFromTree(&node.children![$0], id: id) }
         node.size = node.ownSize + (node.children ?? []).reduce(UInt64(0)) { $0 + $1.size }
+    }
+}
+
+/// Drag payload for a scanned node — dropped on the delete collector.
+struct DraggedNode: Codable, Transferable {
+    let id: UUID
+    let path: String
+    let name: String
+    let size: UInt64
+    let isDirectory: Bool
+
+    init(_ n: DiskNode) {
+        id = n.id; path = n.path; name = n.name
+        size = n.size; isDirectory = n.isDirectory
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
     }
 }
 
@@ -337,7 +411,7 @@ struct DiskAnalyzerView: View {
             .onTapGesture { if child.isDirectory { vm.drill(child) } }
             .contextMenu {
                 Button("Reveal in Finder") { vm.reveal(child) }
-                Button("Move to Trash", role: .destructive) { vm.trash(child) }
+                Button("Move to Trash", role: .destructive) { vm.stage(child) }
             }
         }
         .listStyle(.plain)
