@@ -176,7 +176,7 @@ final class DiskAnalyzerViewModel: ObservableObject {
     // MARK: - Staged delete (DaisyDisk-style collector)
 
     /// Seconds the user has to change their mind before staged items are trashed.
-    static let deleteCooldown: TimeInterval = 5
+    static let deleteCooldown: TimeInterval = 10
 
     @Published var staged: [DiskNode] = []
     @Published var deleteCountdown: TimeInterval = 0
