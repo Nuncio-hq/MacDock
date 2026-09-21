@@ -192,45 +192,46 @@ struct StorageManagerView: View {
     }
 }
 
-/// DaisyDisk-style trash collector: drag items in, see the pending total,
-/// get a short countdown to undo before they're really moved to Trash.
+/// DaisyDisk-style trash collector: drag items in to hold them, press
+/// Delete and a garbage truck runs them into the bin; Undo plays a
+/// restock animation instead — nothing is deleted until Delete is hit.
 private struct DeleteCollector: View {
     @ObservedObject var vm: DiskAnalyzerViewModel
     @State private var targeted = false
+    @State private var truckX: CGFloat = 0
+    @State private var chipsTipped = false
+    @State private var chipsRestocked = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: vm.staged.isEmpty ? "trash" : "trash.fill")
-                .font(.title3)
-                .symbolEffect(.bounce, value: vm.staged.count)
-                .foregroundStyle(targeted ? Color.accentTeal : .secondary)
+        GeometryReader { geo in
+            HStack(spacing: 12) {
+                binIcon
 
-            if vm.staged.isEmpty {
-                Text("Drag items here to delete")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(vm.staged) { chip($0) }
-                    }
+                if vm.staged.isEmpty && vm.collectorPhase == .collecting {
+                    Text("Drag items here to hold them")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    chipStrip
                 }
-            }
-            Spacer()
+                Spacer()
 
-            if !vm.staged.isEmpty {
-                Text(fmtBytes(vm.stagedBytes)).font(.callout).monospacedDigit()
-                countdownRing
-                Button("Undo") { vm.cancelStaged() }
-                    .buttonStyle(.bordered).controlSize(.small)
+                if !vm.staged.isEmpty || vm.collectorPhase != .collecting {
+                    Text(fmtBytes(vm.stagedBytes)).font(.callout).monospacedDigit()
+                    actionButtons
+                }
+
+                truck(in: geo.size.width)
             }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(targeted ? Color.accentTeal.opacity(0.12) : .clear)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(targeted ? Color.accentTeal : .secondary.opacity(0.3),
+                                  style: StrokeStyle(lineWidth: 1, dash: [5]))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(targeted ? Color.accentTeal.opacity(0.12) : .clear)
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(targeted ? Color.accentTeal : .secondary.opacity(0.3),
-                              style: StrokeStyle(lineWidth: 1, dash: [5]))
-        }
+        .frame(height: 44)
         .padding(.horizontal, 12).padding(.bottom, 8)
         .dropDestination(for: DraggedNode.self) { items, _ in
             var handled = false
@@ -239,7 +240,75 @@ private struct DeleteCollector: View {
             }
             return handled
         } isTargeted: { targeted = $0 }
-        .animation(.spring(response: 0.3), value: vm.staged.count)
+        .onChange(of: vm.collectorPhase) { _, phase in
+            switch phase {
+            case .emptying: runTruck()
+            case .restocking: runRestock()
+            case .collecting:
+                chipsTipped = false; chipsRestocked = false; truckX = 0
+            }
+        }
+    }
+
+    private var binIcon: some View {
+        Image(systemName: vm.staged.isEmpty ? "trash" : "trash.fill")
+            .font(.title3)
+            .symbolEffect(.bounce, value: vm.staged.count)
+            .foregroundStyle(targeted ? Color.accentTeal : .secondary)
+    }
+
+    private var chipStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(vm.staged) { chip($0) }
+            }
+        }
+        // Truck run: chips collapse toward the bin and vanish.
+        // Restock: chips fly back up out of the bar.
+        .opacity(chipsTipped ? 0 : 1)
+        .offset(y: chipsTipped ? 10 : (chipsRestocked ? -34 : 0))
+        .scaleEffect(chipsTipped ? 0.2 : (chipsRestocked ? 0.7 : 1),
+                   anchor: chipsRestocked ? .top : .leading)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        if vm.collectorPhase == .collecting {
+            Button { vm.requestRestore() } label: {
+                Label("Put back", systemImage: "arrow.uturn.backward")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            Button(role: .destructive) { vm.requestCommit() } label: {
+                Label("Delete (\(vm.staged.count))", systemImage: "trash")
+            }
+            .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private func truck(in width: CGFloat) -> some View {
+        if vm.collectorPhase == .emptying {
+            Text("🚚")
+                .font(.system(size: 22))
+                .scaleEffect(x: -1)          // face left, toward the bin
+                .offset(x: truckX)
+                .onAppear {
+                    withAnimation(.easeIn(duration: 0.7)) {
+                        truckX = -(width - 60)
+                    }
+                    withAnimation(.easeOut(duration: 0.4).delay(0.75)) {
+                        chipsTipped = true
+                    }
+                }
+        }
+    }
+
+    private func runTruck() { truckX = 0 }
+
+    private func runRestock() {
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+            chipsRestocked = true
+        }
     }
 
     private func chip(_ node: DiskNode) -> some View {
@@ -247,26 +316,15 @@ private struct DeleteCollector: View {
             Image(systemName: node.isDirectory ? "folder.fill" : "doc")
                 .font(.caption2).foregroundStyle(.secondary)
             Text(node.name).font(.caption).lineLimit(1)
-            Button { vm.unstage(node) } label: {
-                Image(systemName: "xmark").font(.caption2)
+            if vm.collectorPhase == .collecting {
+                Button { vm.unstage(node) } label: {
+                    Image(systemName: "xmark").font(.caption2)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(.quaternary, in: Capsule())
-    }
-
-    private var countdownRing: some View {
-        ZStack {
-            Circle().stroke(.quaternary, lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: vm.deleteCountdown / DiskAnalyzerViewModel.deleteCooldown)
-                .stroke(.orange, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            Text("\(Int(ceil(vm.deleteCountdown)))")
-                .font(.caption2).monospacedDigit()
-        }
-        .frame(width: 22, height: 22)
     }
 
     private func fmtBytes(_ n: UInt64) -> String {

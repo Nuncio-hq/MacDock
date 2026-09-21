@@ -175,31 +175,26 @@ final class DiskAnalyzerViewModel: ObservableObject {
 
     // MARK: - Staged delete (DaisyDisk-style collector)
 
-    /// Seconds the user has to change their mind before staged items are trashed.
-    static let deleteCooldown: TimeInterval = 10
+    /// collecting: items sit in the bar awaiting the Delete button.
+    /// emptying: truck animation running, commits to Trash when it ends.
+    /// restocking: undo animation running, nothing is deleted.
+    enum CollectorPhase { case collecting, emptying, restocking }
 
     @Published var staged: [DiskNode] = []
-    @Published var deleteCountdown: TimeInterval = 0
-    private var deleteTask: Task<Void, Never>?
+    @Published var collectorPhase: CollectorPhase = .collecting
 
     var stagedBytes: UInt64 { staged.reduce(0) { $0 + $1.size } }
 
     func stage(_ node: DiskNode) {
+        guard collectorPhase == .collecting else { return }
         guard !staged.contains(where: { $0.id == node.id }) else { return }
-        staged.append(node)
-        deleteCountdown = Self.deleteCooldown
-        scheduleCommit()
+        withAnimation(.spring(response: 0.3)) { staged.append(node) }
     }
 
     func unstage(_ node: DiskNode) {
-        staged.removeAll { $0.id == node.id }
-        if staged.isEmpty { cancelStaged() }
-    }
-
-    func cancelStaged() {
-        deleteTask?.cancel()
-        staged = []
-        deleteCountdown = 0
+        withAnimation(.spring(response: 0.3)) {
+            staged.removeAll { $0.id == node.id }
+        }
     }
 
     func isStaged(_ node: DiskNode) -> Bool { staged.contains { $0.id == node.id } }
@@ -209,23 +204,30 @@ final class DiskAnalyzerViewModel: ObservableObject {
         (current?.children ?? []).first { $0.id == id }
     }
 
-    private func scheduleCommit() {
-        deleteTask?.cancel()
-        deleteTask = Task { [weak self] in
-            while let self, self.deleteCountdown > 0 {
-                try? await Task.sleep(for: .milliseconds(100))
-                if Task.isCancelled { return }
-                self.deleteCountdown = max(0, self.deleteCountdown - 0.1)
-            }
-            if !Task.isCancelled { self?.commitStaged() }
+    /// Garbage-truck run: chips tip into the bin, then everything is trashed.
+    func requestCommit() {
+        guard collectorPhase == .collecting, !staged.isEmpty else { return }
+        collectorPhase = .emptying
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard let self, !Task.isCancelled else { return }
+            let doomed = self.staged
+            self.staged = []
+            self.collectorPhase = .collecting
+            for node in doomed { self.trash(node) }
         }
     }
 
-    private func commitStaged() {
-        let doomed = staged
-        staged = []
-        deleteCountdown = 0
-        for node in doomed { trash(node) }
+    /// Restock run: chips fly back up into the stack, nothing is deleted.
+    func requestRestore() {
+        guard collectorPhase == .collecting, !staged.isEmpty else { return }
+        collectorPhase = .restocking
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard let self, !Task.isCancelled else { return }
+            self.staged = []
+            self.collectorPhase = .collecting
+        }
     }
 
     private func refreshAfterDelete(_ node: DiskNode) {
