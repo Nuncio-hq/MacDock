@@ -158,6 +158,10 @@ final class DiskAnalyzerViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
     }
 
+    func revealPath(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
     func trash(_ node: DiskNode) {
         do {
             try FileManager.default.trashItem(at: URL(fileURLWithPath: node.path),
@@ -184,6 +188,7 @@ final class DiskAnalyzerViewModel: ObservableObject {
 
 struct DiskAnalyzerView: View {
     @StateObject private var vm = DiskAnalyzerViewModel()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -237,6 +242,15 @@ struct DiskAnalyzerView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.accentTeal)
+
+            Button {
+                openWindow(id: "storage")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Label("Open Storage Manager", systemImage: "macwindow")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain).foregroundStyle(Color.accentTeal)
 
             spotList
             Spacer()
