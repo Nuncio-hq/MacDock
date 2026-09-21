@@ -25,6 +25,8 @@ struct MonitorView: View {
             LabeledContent("Network ↑",
                            value: "\(fmtBytes(UInt64(max(0, stats.snapshot.netBytesOutPerSec))))/s")
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .onAppear { stats.start() }
         .onDisappear { stats.stop() }
     }
@@ -51,6 +53,7 @@ private struct GaugeRow: View {
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
             ProgressView(value: min(max(value, 0), 1))
+                .tint(Color.accentTeal)
         }
     }
 }

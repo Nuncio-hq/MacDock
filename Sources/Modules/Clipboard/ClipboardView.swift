@@ -45,6 +45,7 @@ struct ClipboardView: View {
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
         .onAppear { store.start() }
