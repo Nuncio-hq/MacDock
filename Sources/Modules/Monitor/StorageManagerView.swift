@@ -260,15 +260,15 @@ private struct DeleteCollector: View {
     private var chipStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(vm.staged) { chip($0) }
+                ForEach(Array(vm.staged.enumerated()), id: \.element.id) { index, node in
+                    chip(node, index: index)
+                }
             }
         }
         // Truck run: chips collapse toward the bin and vanish.
-        // Restock: chips fly back up out of the bar.
         .opacity(chipsTipped ? 0 : 1)
-        .offset(y: chipsTipped ? 10 : (chipsRestocked ? -34 : 0))
-        .scaleEffect(chipsTipped ? 0.2 : (chipsRestocked ? 0.7 : 1),
-                   anchor: chipsRestocked ? .top : .leading)
+        .offset(y: chipsTipped ? 10 : 0)
+        .scaleEffect(chipsTipped ? 0.2 : 1, anchor: .leading)
     }
 
     @ViewBuilder
@@ -290,8 +290,7 @@ private struct DeleteCollector: View {
         if vm.collectorPhase == .emptying {
             Text("🚚")
                 .font(.system(size: 22))
-                .scaleEffect(x: -1)          // face left, toward the bin
-                .offset(x: truckX)
+                .offset(x: truckX)           // drives left, into the bin
                 .onAppear {
                     withAnimation(.easeIn(duration: 0.7)) {
                         truckX = -(width - 60)
@@ -306,12 +305,10 @@ private struct DeleteCollector: View {
     private func runTruck() { truckX = 0 }
 
     private func runRestock() {
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-            chipsRestocked = true
-        }
+        chipsRestocked = true
     }
 
-    private func chip(_ node: DiskNode) -> some View {
+    private func chip(_ node: DiskNode, index: Int) -> some View {
         HStack(spacing: 4) {
             Image(systemName: node.isDirectory ? "folder.fill" : "doc")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -328,6 +325,15 @@ private struct DeleteCollector: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(.quaternary, in: Capsule())
+        // Restock: each chip arcs back up toward the table, staggered.
+        .offset(x: chipsRestocked ? CGFloat(index * -6) : 0,
+                y: chipsRestocked ? -44 : 0)
+        .rotationEffect(.degrees(chipsRestocked ? (index.isMultiple(of: 2) ? -14 : 10) : 0))
+        .scaleEffect(chipsRestocked ? 0.55 : 1)
+        .opacity(chipsRestocked ? 0 : 1)
+        .animation(.spring(response: 0.55, dampingFraction: 0.75)
+                       .delay(Double(index) * 0.07),
+                   value: chipsRestocked)
     }
 
     private func fmtBytes(_ n: UInt64) -> String {
