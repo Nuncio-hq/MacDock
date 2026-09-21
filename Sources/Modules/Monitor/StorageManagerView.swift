@@ -318,7 +318,10 @@ private struct DeleteCollector: View {
             Text(node.name).font(.caption).lineLimit(1)
             if vm.collectorPhase == .collecting {
                 Button { vm.unstage(node) } label: {
-                    Image(systemName: "xmark").font(.caption2)
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.bold))
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
             }
