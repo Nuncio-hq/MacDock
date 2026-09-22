@@ -27,8 +27,18 @@ final class DiskAnalyzerViewModel: ObservableObject {
     @Published var volumes: [VolumeInfo] = []
     @Published var biggestFiles: [DiskNode] = []
     @Published var lastFreed: UInt64 = 0
+    @Published var filesPerSec: Double = 0
+    @Published var bytesPerSec: Double = 0
+    /// Estimated seconds remaining — only meaningful for a "/" scan, where
+    /// the expected total is volume used space.
+    @Published var scanETA: TimeInterval?
+    @Published var adminScanRunning = false
 
     private var scanTask: Task<Void, Never>?
+    private var scanStarted: Date?
+    private var scanTarget: String?
+    private var adminProcess: Process?
+    private var adminProgressTimer: Timer?
 
     init() { loadVolumeInfo(); loadVolumes() }
 
@@ -92,13 +102,9 @@ final class DiskAnalyzerViewModel: ObservableObject {
     }
 
     func startScan(_ path: String) {
-        scanTask?.cancel()
-        scanning = true
-        error = nil
-        root = nil
-        current = nil
+        beginScanUI(path)
         let scanner = DiskScanner { [weak self] p in
-            Task { @MainActor in self?.progress = p }
+            Task { @MainActor in self?.updateProgress(p) }
         }
         scanTask = Task { [weak self] in
             let node = await scanner.scan(root: path)
@@ -108,6 +114,123 @@ final class DiskAnalyzerViewModel: ObservableObject {
             self?.scanning = false
             self?.biggestFiles = scanner.topFiles()
         }
+    }
+
+    private func beginScanUI(_ path: String) {
+        scanTask?.cancel()
+        adminProcess?.terminate()
+        adminProgressTimer?.invalidate()
+        adminScanRunning = false
+        scanning = true
+        error = nil
+        root = nil
+        current = nil
+        progress = ScanProgress()
+        filesPerSec = 0
+        bytesPerSec = 0
+        scanETA = nil
+        scanStarted = Date()
+        scanTarget = path
+    }
+
+    private func updateProgress(_ p: ScanProgress) {
+        progress = p
+        guard let started = scanStarted else { return }
+        let elapsed = Date().timeIntervalSince(started)
+        guard elapsed > 0.5, p.files > 0 else { return }
+        filesPerSec = Double(p.files) / elapsed
+        bytesPerSec = Double(p.bytes) / elapsed
+        // ETA only when scanning the whole volume: expected bytes ≈ used space.
+        if scanTarget == "/", bytesPerSec > 0 {
+            let expected = Double(totalBytes) - Double(freeBytes)
+            let remaining = expected - Double(p.bytes)
+            scanETA = remaining > 0 ? remaining / bytesPerSec : 0
+        }
+    }
+
+    // MARK: - Administrator scan
+
+    /// Whole-disk scan as root via the embedded helper, so TCC-gated dirs
+    /// (mail, messages, other users' files) are included. macOS shows one
+    /// password prompt through osascript's administrator privileges.
+    func scanRootAsAdmin() {
+        guard let helper = Bundle.main.url(forResource: "MacDockScanHelper",
+                                           withExtension: nil) else {
+            error = "Privileged scan helper missing from the app bundle."
+            return
+        }
+        beginScanUI("/")
+        adminScanRunning = true
+
+        let outPath = NSTemporaryDirectory()
+            + "macdock-admin-scan-\(UUID().uuidString).json"
+        let progressPath = outPath + ".progress"
+        let shellCmd = "\(quoted(helper.path)) / \(quoted(outPath))"
+        let source = "do shell script \"\(shellCmd)\" with administrator privileges"
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", source]
+        adminProcess = proc
+
+        adminProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) {
+            [weak self] _ in
+            Task { @MainActor in self?.pollAdminProgress(progressPath) }
+        }
+
+        Task.detached { [weak self] in
+            do { try proc.run() } catch {
+                await MainActor.run {
+                    self?.finishAdminScan(outPath: outPath, progressPath: progressPath)
+                    self?.error = "Couldn't start the privileged scan: \(error.localizedDescription)"
+                }
+                return
+            }
+            proc.waitUntilExit()
+            await MainActor.run {
+                self?.finishAdminScan(outPath: outPath, progressPath: progressPath)
+            }
+        }
+    }
+
+    private func pollAdminProgress(_ progressPath: String) {
+        guard adminScanRunning, scanning else { return }
+        guard let data = FileManager.default.contents(atPath: progressPath),
+              let p = try? JSONDecoder().decode(ScanProgressFile.self, from: data)
+        else { return }
+        updateProgress(ScanProgress(files: p.files, bytes: p.bytes,
+                                    currentPath: p.path))
+    }
+
+    private func finishAdminScan(outPath: String, progressPath: String) {
+        adminProgressTimer?.invalidate()
+        adminProgressTimer = nil
+        adminProcess = nil
+        defer { adminScanRunning = false }
+        guard scanning else { return }   // user cancelled or a new scan started
+        scanning = false
+        guard let data = FileManager.default.contents(atPath: outPath),
+              let result = try? JSONDecoder().decode(ScanFileResult.self, from: data)
+        else {
+            if FileManager.default.contents(atPath: progressPath) == nil {
+                error = "Privileged scan didn't run (authorization declined or failed)."
+            } else {
+                error = "Privileged scan finished but its results couldn't be read."
+            }
+            return
+        }
+        root = DiskNode(dto: result.root)
+        current = root
+        biggestFiles = result.topFiles.map {
+            DiskNode(path: $0.path, name: $0.name, size: $0.size,
+                     isDirectory: false, restricted: false, children: nil)
+        }
+        try? FileManager.default.removeItem(atPath: outPath)
+        try? FileManager.default.removeItem(atPath: progressPath)
+    }
+
+    private func quoted(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// The node to Quick Look — resolves a selection id back to a live node.
@@ -120,6 +243,11 @@ final class DiskAnalyzerViewModel: ObservableObject {
 
     func cancelScan() {
         scanTask?.cancel()
+        // osascript dies with the process; a root helper already running may
+        // finish in the background — its temp output is ignored either way.
+        adminProcess?.terminate()
+        adminProgressTimer?.invalidate()
+        adminScanRunning = false
         scanning = false
     }
 
@@ -266,6 +394,7 @@ final class DiskAnalyzerViewModel: ObservableObject {
             self.lastFreed = freed
             self.biggestFiles.removeAll { f in doomed.contains { $0.id == f.id } }
             self.loadVolumeInfo()
+            self.refreshTrashSize()
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
@@ -283,6 +412,43 @@ final class DiskAnalyzerViewModel: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             self.staged = []
             self.collectorPhase = .collecting
+        }
+    }
+
+    // MARK: - Empty Trash
+
+    /// Bytes currently sitting in ~/.Trash (for the post-delete hint).
+    @Published var trashBytes: UInt64 = 0
+    @Published var emptyingTrash = false
+
+    func refreshTrashSize() {
+        let trash = NSHomeDirectory() + "/.Trash"
+        Task.detached { [weak self] in
+            let size = await Self.dirSize(trash) ?? 0
+            await MainActor.run { self?.trashBytes = size }
+        }
+    }
+
+    /// Direct removal of ~/.Trash contents — same effect as Finder's Empty
+    /// Trash without dragging Finder to the front.
+    func emptyTrash() {
+        guard !emptyingTrash else { return }
+        emptyingTrash = true
+        Task.detached { [weak self] in
+            let trash = NSHomeDirectory() + "/.Trash"
+            if let items = try? FileManager.default.contentsOfDirectory(atPath: trash) {
+                for item in items {
+                    try? FileManager.default.removeItem(
+                        atPath: trash + "/" + item)
+                }
+            }
+            await MainActor.run {
+                self?.emptyingTrash = false
+                self?.trashBytes = 0
+                self?.lastFreed = 0
+                self?.loadVolumeInfo()
+                self?.loadSpots()
+            }
         }
     }
 
@@ -430,8 +596,15 @@ struct DiskAnalyzerView: View {
         VStack(spacing: 10) {
             Spacer()
             ProgressView()
-            Text("Scanning… \(vm.progress.files) items")
+            Text(vm.adminScanRunning
+                 ? "Scanning as administrator… \(vm.progress.files) items"
+                 : "Scanning… \(vm.progress.files) items")
                 .font(.caption)
+            if vm.bytesPerSec > 0 {
+                Text("\(scanRateString(vm.bytesPerSec)) · \(Int(vm.filesPerSec)) items/s"
+                     + (vm.scanETA.map { " · ~\(scanETAString($0)) left" } ?? ""))
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
             Text(vm.progress.currentPath)
                 .font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.middle)

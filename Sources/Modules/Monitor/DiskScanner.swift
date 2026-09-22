@@ -18,7 +18,18 @@ struct DiskNode: Sendable, Identifiable, Hashable {
 
 struct ScanProgress: Sendable {
     var files: Int = 0
+    var bytes: UInt64 = 0
     var currentPath: String = ""
+}
+
+func scanRateString(_ bytesPerSec: Double) -> String {
+    ByteCountFormatter.string(fromByteCount: Int64(bytesPerSec), countStyle: .binary) + "/s"
+}
+
+func scanETAString(_ seconds: TimeInterval) -> String {
+    let s = Int(seconds.rounded())
+    if s < 60 { return "\(s)s" }
+    return "\(s / 60)m \(s % 60)s"
 }
 
 /// Fast recursive directory scanner built on getattrlistbulk(2) — the same
@@ -103,7 +114,10 @@ final class DiskScanner: Sendable {
         // Count a multiply-linked file once.
         if e.linkCount > 1 && !state.insertInode(e.fileID) { return 0 }
         let n = state.bump()
-        if n % 512 == 0 { progress(ScanProgress(files: n, currentPath: e.path)) }
+        let totalBytes = state.addBytes(e.alloc)
+        if n % 512 == 0 {
+            progress(ScanProgress(files: n, bytes: totalBytes, currentPath: e.path))
+        }
         if e.alloc > 0 { state.offerFile(path: e.path, name: e.name, size: e.alloc) }
         return e.alloc
     }
@@ -230,6 +244,7 @@ final class DiskScanner: Sendable {
 private final class ScanState: @unchecked Sendable {
     private let lock = NSLock()
     private var files = 0
+    private var bytes: UInt64 = 0
     private var inodes = Set<UInt64>()
     /// Largest files seen, kept sorted descending, capped at 128.
     private var largest: [(path: String, name: String, size: UInt64)] = []
@@ -238,6 +253,12 @@ private final class ScanState: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         files += 1
         return files
+    }
+
+    func addBytes(_ n: UInt64) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        bytes += n
+        return bytes
     }
 
     /// Returns false if the inode was already counted.

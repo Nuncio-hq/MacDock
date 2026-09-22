@@ -29,6 +29,9 @@ struct StorageManagerView: View {
             Section("Scan") {
                 sidebarButton("Home Folder", icon: "house") { vm.scanHome() }
                 sidebarButton("Macintosh HD", icon: "internaldrive") { vm.scanRoot() }
+                sidebarButton("Macintosh HD (administrator)", icon: "lock.shield") {
+                    vm.scanRootAsAdmin()
+                }
                 sidebarButton("Folder…", icon: "folder.badge.plus") { vm.pickFolder() }
                 if vm.root != nil {
                     sidebarButton("Biggest files", icon: "arrow.up.doc") {
@@ -113,7 +116,14 @@ struct StorageManagerView: View {
             if vm.scanning {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("Scanning… \(vm.progress.files) items").font(.callout)
+                    Text(vm.adminScanRunning
+                         ? "Scanning as administrator… \(vm.progress.files) items"
+                         : "Scanning… \(vm.progress.files) items").font(.callout)
+                    if vm.bytesPerSec > 0 {
+                        Text("\(scanRateString(vm.bytesPerSec)) · \(Int(vm.filesPerSec)) items/s"
+                             + (vm.scanETA.map { " · ~\(scanETAString($0)) left" } ?? ""))
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
                     Text(vm.progress.currentPath)
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).frame(maxWidth: 420)
@@ -176,8 +186,20 @@ struct StorageManagerView: View {
             if vm.lastFreed > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text("Freed \(Self.fmt(vm.lastFreed))").font(.callout)
+                    Text("Freed \(Self.fmt(vm.lastFreed)) — held in Trash").font(.callout)
                     Spacer()
+                    Button {
+                        vm.emptyTrash()
+                    } label: {
+                        if vm.emptyingTrash {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Empty Trash\(vm.trashBytes > 0 ? " (\(Self.fmt(vm.trashBytes)))" : "")",
+                                  systemImage: "trash.slash")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(vm.emptyingTrash)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 6)
                 .background(Color.green.opacity(0.1))
@@ -304,8 +326,20 @@ struct StorageManagerView: View {
             if vm.lastFreed > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text("Freed \(Self.fmt(vm.lastFreed))").font(.callout)
+                    Text("Freed \(Self.fmt(vm.lastFreed)) — held in Trash").font(.callout)
                     Spacer()
+                    Button {
+                        vm.emptyTrash()
+                    } label: {
+                        if vm.emptyingTrash {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Empty Trash\(vm.trashBytes > 0 ? " (\(Self.fmt(vm.trashBytes)))" : "")",
+                                  systemImage: "trash.slash")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(vm.emptyingTrash)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 6)
                 .background(Color.green.opacity(0.1))
