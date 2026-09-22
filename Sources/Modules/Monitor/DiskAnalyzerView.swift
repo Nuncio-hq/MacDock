@@ -105,23 +105,8 @@ final class DiskAnalyzerViewModel: ObservableObject {
             self?.root = node
             self?.current = node
             self?.scanning = false
-            self?.collectBiggestFiles()
+            self?.biggestFiles = scanner.topFiles()
         }
-    }
-
-    /// Flat list of the largest individual files anywhere in the scanned tree.
-    func collectBiggestFiles() {
-        guard let root else { biggestFiles = []; return }
-        var files: [DiskNode] = []
-        var stack = [root]
-        while let n = stack.popLast() {
-            if let children = n.children {
-                stack.append(contentsOf: children)
-            } else if !n.isDirectory && n.size > 0 {
-                files.append(n)
-            }
-        }
-        biggestFiles = files.sorted { $0.size > $1.size }.prefix(100).map { $0 }
     }
 
     /// The node to Quick Look — resolves a selection id back to a live node.
@@ -255,9 +240,11 @@ final class DiskAnalyzerViewModel: ObservableObject {
 
     func isStaged(_ node: DiskNode) -> Bool { staged.contains { $0.id == node.id } }
 
-    /// Resolve a dropped drag payload back to a live child of the current dir.
+    /// Resolve a dropped drag payload back to a live node — children of the
+    /// current dir or entries in the biggest-files list.
     func node(withID id: UUID) -> DiskNode? {
         (current?.children ?? []).first { $0.id == id }
+            ?? biggestFiles.first { $0.id == id }
     }
 
     /// Garbage-truck run: chips tip into the bin, then everything is trashed.
@@ -276,6 +263,7 @@ final class DiskAnalyzerViewModel: ObservableObject {
                 self.trash(node)
             }
             self.lastFreed = freed
+            self.biggestFiles.removeAll { f in doomed.contains { $0.id == f.id } }
             self.loadVolumeInfo()
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(8))
