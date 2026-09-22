@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: hq.nuncio
   deploymentTarget:
     macOS: "15.0"
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.4
 targets:
   MacDock:
     type: application
@@ -15,10 +19,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: hq.nuncio.MacDock
         PRODUCT_NAME: MacDock
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSUIElement: YES
-        INFOPLIST_KEY_NSSupportsAutomaticTermination: NO
-        INFOPLIST_KEY_CFBundleDisplayName: MacDock
+        INFOPLIST_FILE: Sources/Info.plist
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "6.0"
@@ -27,15 +28,19 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - target: MacDockScanHelper
+      - package: Sparkle
     postBuildScripts:
       - name: Embed scan helper
         script: |
           HELPER_SRC="$BUILT_PRODUCTS_DIR/MacDockScanHelper"
           HELPER_DST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/MacDockScanHelper"
           cp -f "$HELPER_SRC" "$HELPER_DST"
-          codesign --force --sign - "$HELPER_DST" >/dev/null 2>&1 || true
+          codesign --force --sign "$CODE_SIGN_IDENTITY" \
+            --options runtime --timestamp "$HELPER_DST" 2>/dev/null \
+            || codesign --force --sign - "$HELPER_DST"
   MacDockScanHelper:
     type: tool
     platform: macOS
@@ -51,3 +56,4 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: YES
