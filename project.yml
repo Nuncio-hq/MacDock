@@ -9,6 +9,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+        excludes:
+          - ScanHelper/**
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: hq.nuncio.MacDock
@@ -25,3 +27,27 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         ENABLE_APP_SANDBOX: NO
+    dependencies:
+      - target: MacDockScanHelper
+    postBuildScripts:
+      - name: Embed scan helper
+        script: |
+          HELPER_SRC="$BUILT_PRODUCTS_DIR/MacDockScanHelper"
+          HELPER_DST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/MacDockScanHelper"
+          cp -f "$HELPER_SRC" "$HELPER_DST"
+          codesign --force --sign - "$HELPER_DST" >/dev/null 2>&1 || true
+  MacDockScanHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/ScanHelper
+      - path: Sources/Shared
+      - path: Sources/Modules/Monitor/DiskScanner.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: hq.nuncio.MacDockScanHelper
+        PRODUCT_NAME: MacDockScanHelper
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
