@@ -6,6 +6,7 @@ import AppKit
 struct StorageManagerView: View {
     @StateObject private var vm = DiskAnalyzerViewModel()
     @State private var selection = Set<DiskNode.ID>()
+    @State private var showBiggest = false
 
     var body: some View {
         NavigationSplitView {
@@ -29,6 +30,35 @@ struct StorageManagerView: View {
                 sidebarButton("Home Folder", icon: "house") { vm.scanHome() }
                 sidebarButton("Macintosh HD", icon: "internaldrive") { vm.scanRoot() }
                 sidebarButton("Folder…", icon: "folder.badge.plus") { vm.pickFolder() }
+                if vm.root != nil {
+                    sidebarButton("Biggest files", icon: "arrow.up.doc") {
+                        showBiggest = true
+                    }
+                }
+            }
+            let extraVolumes = vm.volumes.filter { $0.path != "/" }
+            if !extraVolumes.isEmpty {
+                Section("Volumes") {
+                    ForEach(extraVolumes) { vol in
+                        Button {
+                            showBiggest = false
+                            vm.startScan(vol.path)
+                        } label: {
+                            HStack {
+                                Image(systemName: "externaldrive")
+                                    .foregroundStyle(Color.accentTeal)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(vol.name).font(.callout)
+                                    Text("\(Self.fmt(vol.free)) free of \(Self.fmt(vol.total))")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Scan \(vol.path)")
+                    }
+                }
             }
             Section("Known hiding spots") {
                 ForEach(vm.spots) { spot in
@@ -78,27 +108,82 @@ struct StorageManagerView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if vm.scanning {
-            VStack(spacing: 12) {
-                ProgressView()
-                Text("Scanning… \(vm.progress.files) items").font(.callout)
-                Text(vm.progress.currentPath)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: 420)
-                Button("Cancel", role: .cancel) { vm.cancelScan() }
+        VStack(spacing: 0) {
+            usageBar
+            if vm.scanning {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Scanning… \(vm.progress.files) items").font(.callout)
+                    Text(vm.progress.currentPath)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 420)
+                    Button("Cancel", role: .cancel) { vm.cancelScan() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if showBiggest && vm.root != nil {
+                biggestFilesView
+            } else if let current = vm.current {
+                results(current)
+            } else {
+                ContentUnavailableView("No scan yet",
+                    systemImage: "internaldrive",
+                    description: Text("Pick a scan target in the sidebar — Home, the whole disk, or any folder."))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let current = vm.current {
-            results(current)
-        } else {
-            ContentUnavailableView("No scan yet",
-                systemImage: "internaldrive",
-                description: Text("Pick a scan target in the sidebar — Home, the whole disk, or any folder."))
+        }
+    }
+
+    /// DaisyDisk-style capacity strip: really-used / purgeable / free.
+    private var usageBar: some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                let total = max(Double(vm.totalBytes), 1)
+                let realUsed = max(0.0, Double(vm.totalBytes) - Double(vm.freeBytes) - Double(vm.purgeableBytes))
+                let wUsed = geo.size.width * realUsed / total
+                let wPurge = geo.size.width * Double(vm.purgeableBytes) / total
+                HStack(spacing: 1) {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.accentTeal)
+                        .frame(width: max(wUsed, 0))
+                    RoundedRectangle(cornerRadius: 2).fill(Color.orange.opacity(0.8))
+                        .frame(width: max(wPurge, 0))
+                    RoundedRectangle(cornerRadius: 2).fill(.quaternary)
+                }
+            }
+            .frame(height: 10)
+            HStack(spacing: 14) {
+                legend(Color.accentTeal, "Used")
+                if vm.purgeableBytes > 0 {
+                    legend(Color.orange.opacity(0.8),
+                           "Purgeable \(Self.fmt(vm.purgeableBytes))")
+                }
+                legend(Color.gray.opacity(0.25), "Free \(Self.fmt(vm.freeBytes))")
+                Spacer()
+                Text(Self.fmt(vm.totalBytes)).font(.caption2)
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
+    }
+
+    private func legend(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 
     private func results(_ current: DiskNode) -> some View {
         VStack(spacing: 0) {
+            if vm.lastFreed > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Freed \(Self.fmt(vm.lastFreed))").font(.callout)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             HStack(spacing: 10) {
                 if current.id != vm.root?.id {
                     Button { vm.drillUp() } label: {
@@ -146,8 +231,12 @@ struct StorageManagerView: View {
             .contextMenu(forSelectionType: DiskNode.ID.self) { ids in
                 if let id = ids.first,
                    let node = children.first(where: { $0.id == id }) {
+                    Button("Quick Look") { quickLook(node) }
                     Button("Reveal in Finder") { vm.reveal(node) }
-                    if node.isDirectory { Button("Drill down") { vm.drill(node) } }
+                    if node.isDirectory {
+                        Button("Drill down") { vm.drill(node) }
+                        Button("Scan this folder") { vm.startScan(node.path) }
+                    }
                     Divider()
                     Button("Move to Trash", role: .destructive) { vm.stage(node) }
                 }
@@ -155,6 +244,22 @@ struct StorageManagerView: View {
                 if let id = ids.first,
                    let node = children.first(where: { $0.id == id }),
                    node.isDirectory { vm.drill(node) }
+            }
+
+            // Scan-as-you-go: a drilled dir we couldn't see inside gets a
+            // dedicated scan button instead of a dead end.
+            if current.isDirectory && children.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: current.restricted ? "lock" : "questionmark.folder")
+                        .foregroundStyle(.secondary)
+                    Text(current.restricted
+                         ? "This folder is restricted. A dedicated scan may see more with the right permissions."
+                         : "Nothing scanned inside here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Scan this folder") { vm.startScan(current.path) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+                .padding(.vertical, 12)
             }
 
             if let id = selection.first,
@@ -185,6 +290,98 @@ struct StorageManagerView: View {
             Divider()
             DeleteCollector(vm: vm)
         }
+        .overlay { shortcutButtons }
+    }
+
+    private func selectedNode() -> DiskNode? {
+        guard let id = selection.first else { return nil }
+        return vm.node(withID: id) ?? vm.biggestFiles.first { $0.id == id }
+    }
+
+    /// Flat top-files list for the whole scanned tree.
+    private var biggestFilesView: some View {
+        VStack(spacing: 0) {
+            if vm.lastFreed > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Freed \(Self.fmt(vm.lastFreed))").font(.callout)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+            }
+            HStack(spacing: 10) {
+                Button { showBiggest = false } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless).foregroundStyle(Color.accentTeal)
+                Text("Biggest files").font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(vm.biggestFiles.count) files").font(.caption)
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            Divider()
+
+            Table(vm.biggestFiles, selection: $selection) {
+                TableColumn("Name") { file in
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc")
+                            .foregroundStyle(.secondary)
+                        Text(file.name).lineLimit(1).truncationMode(.middle)
+                            .strikethrough(vm.isStaged(file))
+                            .foregroundStyle(vm.isStaged(file) ? .secondary : .primary)
+                    }
+                    .draggable(DraggedNode(file))
+                }
+                TableColumn("Location") { file in
+                    Text(URL(fileURLWithPath: file.path).deletingLastPathComponent().path)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                TableColumn("Size") { file in
+                    Text(Self.fmt(file.size)).monospacedDigit()
+                }
+                .width(90)
+                .alignment(.trailing)
+            }
+            .contextMenu(forSelectionType: DiskNode.ID.self) { ids in
+                if let id = ids.first,
+                   let file = vm.biggestFiles.first(where: { $0.id == id }) {
+                    Button("Quick Look") { quickLook(file) }
+                    Button("Reveal in Finder") { vm.reveal(file) }
+                    Divider()
+                    Button("Move to Trash", role: .destructive) { vm.stage(file) }
+                }
+            } primaryAction: { ids in
+                if let id = ids.first,
+                   let file = vm.biggestFiles.first(where: { $0.id == id }) {
+                    quickLook(file)
+                }
+            }
+
+            Divider()
+            DeleteCollector(vm: vm)
+        }
+        .overlay { shortcutButtons }
+    }
+
+    /// Space = Quick Look, ⌫ = hold for delete, ⌘⏎ = reveal in Finder.
+    private var shortcutButtons: some View {
+        HStack {
+            Button("") { selectedNode().map(quickLook) }
+                .keyboardShortcut(.space, modifiers: [])
+            Button("") { selectedNode().map(vm.stage) }
+                .keyboardShortcut(.delete, modifiers: [])
+            Button("") { selectedNode().map(vm.reveal) }
+                .keyboardShortcut(.return, modifiers: .command)
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+    }
+
+    private func quickLook(_ node: DiskNode) {
+        QuickLookController.shared.preview([URL(fileURLWithPath: node.path)])
     }
 
     private static func fmt(_ n: UInt64) -> String {

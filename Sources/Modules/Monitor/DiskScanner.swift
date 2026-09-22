@@ -104,7 +104,17 @@ final class DiskScanner: Sendable {
         if e.linkCount > 1 && !state.insertInode(e.fileID) { return 0 }
         let n = state.bump()
         if n % 512 == 0 { progress(ScanProgress(files: n, currentPath: e.path)) }
+        if e.alloc > 0 { state.offerFile(path: e.path, name: e.name, size: e.alloc) }
         return e.alloc
+    }
+
+    /// Largest individual files seen during the scan (for the "biggest
+    /// files" view — file entries aren't nodes in the tree).
+    func topFiles(limit: Int = 100) -> [DiskNode] {
+        state.largestFiles().prefix(limit).map {
+            DiskNode(path: $0.path, name: $0.name, size: $0.size,
+                     isDirectory: false, restricted: false, children: nil)
+        }
     }
 
     private static func makeAttrSpec() -> attrlist {
@@ -221,6 +231,8 @@ private final class ScanState: @unchecked Sendable {
     private let lock = NSLock()
     private var files = 0
     private var inodes = Set<UInt64>()
+    /// Largest files seen, kept sorted descending, capped at 128.
+    private var largest: [(path: String, name: String, size: UInt64)] = []
 
     func bump() -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -232,6 +244,24 @@ private final class ScanState: @unchecked Sendable {
     func insertInode(_ id: UInt64) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return inodes.insert(id).inserted
+    }
+
+    func offerFile(path: String, name: String, size: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        if largest.count < 128 {
+            largest.append((path, name, size))
+            if largest.count == 128 { largest.sort { $0.size > $1.size } }
+            return
+        }
+        if size <= largest[largest.count - 1].size { return }
+        let i = largest.firstIndex { $0.size < size } ?? largest.count
+        largest.insert((path, name, size), at: i)
+        largest.removeLast()
+    }
+
+    func largestFiles() -> [(path: String, name: String, size: UInt64)] {
+        lock.lock(); defer { lock.unlock() }
+        return largest.sorted { $0.size > $1.size }
     }
 }
 
