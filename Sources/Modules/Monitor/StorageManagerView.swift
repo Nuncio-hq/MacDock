@@ -290,19 +290,7 @@ struct StorageManagerView: View {
             Divider()
             DeleteCollector(vm: vm)
         }
-        // Space = Quick Look, ⌫ = hold for delete, ⌘⏎ = reveal in Finder.
-        .overlay {
-            HStack {
-                Button("") { selectedNode().map(quickLook) }
-                    .keyboardShortcut(.space, modifiers: [])
-                Button("") { selectedNode().map(vm.stage) }
-                    .keyboardShortcut(.delete, modifiers: [])
-                Button("") { selectedNode().map(vm.reveal) }
-                    .keyboardShortcut(.return, modifiers: .command)
-            }
-            .frame(width: 0, height: 0)
-            .hidden()
-        }
+        .overlay { shortcutButtons }
     }
 
     private func selectedNode() -> DiskNode? {
@@ -313,6 +301,15 @@ struct StorageManagerView: View {
     /// Flat top-files list for the whole scanned tree.
     private var biggestFilesView: some View {
         VStack(spacing: 0) {
+            if vm.lastFreed > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Freed \(Self.fmt(vm.lastFreed))").font(.callout)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+            }
             HStack(spacing: 10) {
                 Button { showBiggest = false } label: {
                     Label("Back", systemImage: "chevron.left")
@@ -362,7 +359,25 @@ struct StorageManagerView: View {
                     quickLook(file)
                 }
             }
+
+            Divider()
+            DeleteCollector(vm: vm)
         }
+        .overlay { shortcutButtons }
+    }
+
+    /// Space = Quick Look, ⌫ = hold for delete, ⌘⏎ = reveal in Finder.
+    private var shortcutButtons: some View {
+        HStack {
+            Button("") { selectedNode().map(quickLook) }
+                .keyboardShortcut(.space, modifiers: [])
+            Button("") { selectedNode().map(vm.stage) }
+                .keyboardShortcut(.delete, modifiers: [])
+            Button("") { selectedNode().map(vm.reveal) }
+                .keyboardShortcut(.return, modifiers: .command)
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
     }
 
     private func quickLook(_ node: DiskNode) {
