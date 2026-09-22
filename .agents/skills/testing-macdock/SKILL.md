@@ -36,3 +36,17 @@ MacDock is an LSUIElement agent: no Dock icon, no windows except the menubar pan
 - Footer "Preferences" opens a 380x200 Settings window with 3 @AppStorage module toggles (all default ON; persisted across launches).
 - "Quit" terminates the app; verify with `pgrep -x MacDock`. Relaunch with `open build/Build/Products/Debug/MacDock.app` to leave the environment as found.
 - Captured screenshots are written to `~/Pictures/MacDock/` — clean up or note them; they pollute nothing else.
+
+## Admin scan + Empty Trash (PR #7)
+- "Macintosh HD (administrator)" sidebar entry triggers an `osascript "with administrator privileges"` password sheet — the box user password `devin` works; authenticated scan shows "Scanning as administrator…" with rate + ETA.
+- Scan views show "X MB/s · N items/s" once data flows; ETA "~Ts left" appears only when scanning "/".
+- "Empty Trash" button in the Freed banner calls `emptyTrash()` which uses `try?` on `~/.Trash` removal — if the app lacks Trash access (TCC `SystemPolicyAppData`), it silently does nothing: banner dismisses, no error, Trash untouched. Check `sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "select service,client,auth_value from access where client like '%MacDock%'"` and verify with `du -sh ~/.Trash` — the UI gives no signal either way. On a box where Trash is restricted this feature cannot be verified positively.
+
+### Empty Trash error surfacing (cb4d073+)
+- On TCC denial the app shows an orange "Couldn't read the Trash…" banner with a "Privacy Settings" button (opens System Settings → Full Disk Access) and a ✕ dismiss.
+- Granting FDA under automation: the "+" picker often doesn't open. Workaround: `tccutil reset SystemPolicyAllFiles hq.nuncio.MacDock`, then `open -R` the app in Finder, drag the icon onto the FDA list, authenticate, Quit & Reopen, then killall + relaunch again (grant must exist BEFORE the process launches). Verify with `sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service,client,auth_value from access where client like '%MacDock%'"` → auth_value 2 = allowed.
+- Even with FDA allowed, removing ~/.Trash items may still fail if items carry the `com.apple.macl` xattr (TCC per-app data ACL — visible via `ls -la@`). On this box emptyTrash() still got permission-denied post-grant; the error banner handles it gracefully. Success-path verification may need a properly-signed build or a different machine.
+
+### Finder empty-trash fallback (37a0213+)
+- If direct FileManager removal of ~/.Trash fails, the app runs `tell application "Finder" to empty trash` — first call pops a "MacDock wants access to control 'Finder'" consent; Allow empties the whole Trash including com.apple.macl-protected items (verified: 57MB → 0B).
+- Note: rebuilding the adhoc binary invalidates the previous FDA grant (cdhash changes → SystemPolicyAllFiles flips back to 0). Grants must be re-done per build.
