@@ -311,13 +311,11 @@ struct DiskAnalyzerView: View {
     private var idleView: some View {
         VStack(spacing: 14) {
             Spacer()
-            HStack(spacing: 10) {
-                Button("Scan Home") { vm.scanHome() }
-                Button("Scan /") { vm.scanRoot() }
-                Button("Folder…") { vm.pickFolder() }
+            HStack(spacing: 14) {
+                scanIcon("house", tip: "Scan Home") { vm.scanHome() }
+                scanIcon("internaldrive", tip: "Scan Macintosh HD") { vm.scanRoot() }
+                scanIcon("folder.badge.plus", tip: "Scan a folder…") { vm.pickFolder() }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.accentTeal)
 
             Button {
                 openWindow(id: "storage")
@@ -332,6 +330,19 @@ struct DiskAnalyzerView: View {
             Spacer()
         }
         .onAppear { vm.loadSpots() }
+    }
+
+    private func scanIcon(_ symbol: String, tip: String,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .tint(.accentTeal)
+        .help(tip)
     }
 
     private var spotList: some View {
