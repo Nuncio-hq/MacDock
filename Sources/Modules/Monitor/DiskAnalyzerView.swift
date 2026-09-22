@@ -436,18 +436,32 @@ final class DiskAnalyzerViewModel: ObservableObject {
         emptyingTrash = true
         Task.detached { [weak self] in
             let trash = NSHomeDirectory() + "/.Trash"
-            if let items = try? FileManager.default.contentsOfDirectory(atPath: trash) {
+            var failed: String?
+            do {
+                let items = try FileManager.default.contentsOfDirectory(atPath: trash)
+                var left = 0
                 for item in items {
-                    try? FileManager.default.removeItem(
-                        atPath: trash + "/" + item)
+                    do {
+                        try FileManager.default.removeItem(
+                            atPath: trash + "/" + item)
+                    } catch { left += 1 }
                 }
+                if left > 0 { failed = "\(left) item(s) couldn't be removed." }
+            } catch {
+                failed = "Couldn't read the Trash (\(error.localizedDescription)). "
+                    + "Grant Full Disk Access in System Settings → Privacy & Security."
             }
             await MainActor.run {
                 self?.emptyingTrash = false
-                self?.trashBytes = 0
-                self?.lastFreed = 0
+                if let failed {
+                    self?.error = failed
+                } else {
+                    self?.trashBytes = 0
+                    self?.lastFreed = 0
+                }
                 self?.loadVolumeInfo()
                 self?.loadSpots()
+                self?.refreshTrashSize()
             }
         }
     }
@@ -491,6 +505,20 @@ struct DiskAnalyzerView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let msg = vm.error {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).font(.caption)
+                    Text(msg).font(.caption2).lineLimit(2)
+                    Spacer()
+                    Button { vm.error = nil } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 4)
+                .background(Color.orange.opacity(0.12))
+            }
             Divider().padding(.vertical, 6)
             if vm.scanning {
                 scanningView

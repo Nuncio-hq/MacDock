@@ -113,6 +113,7 @@ struct StorageManagerView: View {
     private var detail: some View {
         VStack(spacing: 0) {
             usageBar
+            errorBanner
             if vm.scanning {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -172,6 +173,30 @@ struct StorageManagerView: View {
             }
         }
         .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let msg = vm.error {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(msg).font(.caption)
+                    .lineLimit(3)
+                Spacer()
+                Button("Privacy Settings") {
+                    NSWorkspace.shared.open(URL(
+                        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                }
+                .controlSize(.small)
+                Button { vm.error = nil } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .background(Color.orange.opacity(0.12))
+        }
     }
 
     private func legend(_ color: Color, _ label: String) -> some View {
