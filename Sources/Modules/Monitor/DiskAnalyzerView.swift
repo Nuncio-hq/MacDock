@@ -429,27 +429,38 @@ final class DiskAnalyzerViewModel: ObservableObject {
         }
     }
 
-    /// Direct removal of ~/.Trash contents — same effect as Finder's Empty
-    /// Trash without dragging Finder to the front.
+    /// Empties ~/.Trash: direct removal first, Finder's `empty trash` as the
+    /// fallback for macl-protected items — same effect without Finder UI.
     func emptyTrash() {
         guard !emptyingTrash else { return }
         emptyingTrash = true
         Task.detached { [weak self] in
             let trash = NSHomeDirectory() + "/.Trash"
             var failed: String?
-            do {
-                let items = try FileManager.default.contentsOfDirectory(atPath: trash)
-                var left = 0
-                for item in items {
-                    do {
-                        try FileManager.default.removeItem(
-                            atPath: trash + "/" + item)
-                    } catch { left += 1 }
+            // Prefer direct removal; items trashed by other apps can carry a
+            // com.apple.macl data ACL that even Full Disk Access can't clear,
+            // so fall back to Finder's own `empty trash`, which always works.
+            if let items = try? FileManager.default.contentsOfDirectory(atPath: trash),
+               items.allSatisfy({
+                   (try? FileManager.default.removeItem(
+                       atPath: trash + "/" + $0)) != nil
+               }) {
+                // emptied directly
+            } else {
+                let src = "tell application \"Finder\" to empty trash"
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                proc.arguments = ["-e", src]
+                if (try? proc.run()) != nil {
+                    proc.waitUntilExit()
+                    if proc.terminationStatus != 0 {
+                        failed = "Couldn't empty the Trash — grant Full Disk Access "
+                            + "in System Settings → Privacy & Security."
+                    }
+                } else {
+                    failed = "Couldn't empty the Trash — grant Full Disk Access "
+                        + "in System Settings → Privacy & Security."
                 }
-                if left > 0 { failed = "\(left) item(s) couldn't be removed." }
-            } catch {
-                failed = "Couldn't read the Trash (\(error.localizedDescription)). "
-                    + "Grant Full Disk Access in System Settings → Privacy & Security."
             }
             await MainActor.run {
                 self?.emptyingTrash = false
