@@ -24,10 +24,42 @@ final class DiskAnalyzerViewModel: ObservableObject {
     @Published var freeBytes: UInt64 = 0
     @Published var totalBytes: UInt64 = 0
     @Published var error: String?
+    @Published var volumes: [VolumeInfo] = []
+    @Published var biggestFiles: [DiskNode] = []
+    @Published var lastFreed: UInt64 = 0
 
     private var scanTask: Task<Void, Never>?
 
-    init() { loadVolumeInfo() }
+    init() { loadVolumeInfo(); loadVolumes() }
+
+    struct VolumeInfo: Identifiable {
+        let id = UUID()
+        let name: String
+        let path: String
+        let total: UInt64
+        let free: UInt64
+    }
+
+    /// Mounted local volumes for the sidebar, DaisyDisk-style.
+    func loadVolumes() {
+        let keys: Set<URLResourceKey> = [
+            .volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey,
+            .volumeIsInternalKey, .volumeIsBrowsableKey, .volumeIsRemovableKey,
+        ]
+        let urls = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: Array(keys),
+            options: [.skipHiddenVolumes]) ?? []
+        var result: [VolumeInfo] = []
+        for u in urls {
+            guard let v = try? u.resourceValues(forKeys: keys) else { continue }
+            result.append(VolumeInfo(
+                name: v.volumeName ?? u.lastPathComponent,
+                path: u.path,
+                total: UInt64(v.volumeTotalCapacity ?? 0),
+                free: UInt64(v.volumeAvailableCapacity ?? 0)))
+        }
+        volumes = result
+    }
 
     func loadVolumeInfo() {
         let url = URL(fileURLWithPath: "/")
@@ -73,7 +105,31 @@ final class DiskAnalyzerViewModel: ObservableObject {
             self?.root = node
             self?.current = node
             self?.scanning = false
+            self?.collectBiggestFiles()
         }
+    }
+
+    /// Flat list of the largest individual files anywhere in the scanned tree.
+    func collectBiggestFiles() {
+        guard let root else { biggestFiles = []; return }
+        var files: [DiskNode] = []
+        var stack = [root]
+        while let n = stack.popLast() {
+            if let children = n.children {
+                stack.append(contentsOf: children)
+            } else if !n.isDirectory && n.size > 0 {
+                files.append(n)
+            }
+        }
+        biggestFiles = files.sorted { $0.size > $1.size }.prefix(100).map { $0 }
+    }
+
+    /// The node to Quick Look — resolves a selection id back to a live node.
+    func nodeForQuickLook(_ id: UUID) -> URL? {
+        guard let n = node(withID: id) ?? biggestFiles.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return URL(fileURLWithPath: n.path)
     }
 
     func cancelScan() {
@@ -214,7 +270,18 @@ final class DiskAnalyzerViewModel: ObservableObject {
             let doomed = self.staged
             self.staged = []
             self.collectorPhase = .collecting
-            for node in doomed { self.trash(node) }
+            var freed: UInt64 = 0
+            for node in doomed {
+                freed += node.size
+                self.trash(node)
+            }
+            self.lastFreed = freed
+            self.loadVolumeInfo()
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled else { return }
+                self?.lastFreed = 0
+            }
         }
     }
 
