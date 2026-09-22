@@ -52,6 +52,7 @@ final class DiskAnalyzerViewModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
         panel.begin { [weak self] resp in
             guard resp == .OK, let url = panel.url else { return }
             Task { @MainActor in self?.startScan(url.path) }
