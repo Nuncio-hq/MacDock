@@ -35,6 +35,8 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security import /tmp/cert.p12 -k "$KEYCHAIN" \
             -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          curl -sO https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import AppleWWDRCAG3.cer -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: \
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
@@ -67,6 +69,25 @@ jobs:
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             OTHER_CODE_SIGN_FLAGS="--timestamp" \
             clean build
+
+      - name: Sign nested binaries and app bundle
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" /tmp/build.keychain-db
+          APP="build/Build/Products/Release/$APP_NAME.app"
+          IDENTITY=$(security find-identity -v -p codesigning /tmp/build.keychain-db \
+            | grep "Developer ID Application" | head -1 \
+            | sed -E 's/.*"(.*)"/\1/')
+          F="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+          for t in "$F/XPCServices/Downloader.xpc" "$F/XPCServices/Installer.xpc" \
+                   "$F/Updater.app" "$F/Autoupdate" "$F" \
+                   "$APP/Contents/Resources/MacDockScanHelper" "$APP"; do
+            codesign -f -s "$IDENTITY" --keychain /tmp/build.keychain-db \
+              --timestamp -o runtime "$t"
+          done
+          codesign -vvv --deep --strict "$APP"
 
       - name: Package DMG and ZIP
         run: |
