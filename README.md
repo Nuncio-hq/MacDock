@@ -44,12 +44,13 @@ Required repo secrets:
 
 | Secret | What |
 | --- | --- |
-| `DEVELOPER_ID_P12` | Base64 of the exported Developer ID Application certificate + private key |
+| `DEVELOPER_ID_P12` | Base64 of the exported signing certificate + private key (.p12) |
 | `DEVELOPER_ID_P12_PASSWORD` | Password used when exporting the .p12 |
 | `KEYCHAIN_PASSWORD` | Any strong password for the CI keychain |
-| `APPLE_ID` | Apple ID for notarization |
-| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from appleid.apple.com |
 | `APPLE_TEAM_ID` | 10-char Team ID |
+| `NOTARIZATION_API_KEY_P8` | Base64 of the App Store Connect API key (`AuthKey_*.p8`) used by `notarytool` |
+| `NOTARIZATION_KEY_ID` | The key's ID (e.g. `77G324T46F`) |
+| `NOTARIZATION_ISSUER` | Issuer ID (UUID) from App Store Connect → Integrations |
 | `SPARKLE_PRIVATE_KEY` | EdDSA private key matching `SUPublicEDKey` in `Sources/Info.plist` |
 
 ## Philosophy
