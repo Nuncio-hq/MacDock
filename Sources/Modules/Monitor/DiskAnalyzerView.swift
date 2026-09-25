@@ -13,7 +13,7 @@ struct KnownSpot: Identifiable {
 }
 
 @MainActor
-final class DiskAnalyzerViewModel: ObservableObject {
+final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
     @Published var scanning = false
     @Published var progress = ScanProgress()
     @Published var root: DiskNode?
