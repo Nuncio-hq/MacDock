@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var registry: ModuleRegistry
+    @EnvironmentObject private var updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
     @State private var selectedModuleID: String?
 
@@ -41,6 +42,14 @@ struct ContentView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
                     Label("Preferences", systemImage: "gearshape")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                Button {
+                    updater.checkForUpdates()
+                } label: {
+                    Label("Updates", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

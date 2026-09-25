@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct MacDockApp: App {
     @StateObject private var registry = ModuleRegistry()
+    @StateObject private var updater = UpdaterController()
 
     var body: some Scene {
         MenuBarExtra("MacDock", image: "MenuBarIcon") {
             ContentView()
                 .environmentObject(registry)
+                .environmentObject(updater)
                 .tint(Color.accentTeal)
         }
         .menuBarExtraStyle(.window)

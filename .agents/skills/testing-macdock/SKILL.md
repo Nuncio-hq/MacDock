@@ -50,3 +50,8 @@ MacDock is an LSUIElement agent: no Dock icon, no windows except the menubar pan
 ### Finder empty-trash fallback (37a0213+)
 - If direct FileManager removal of ~/.Trash fails, the app runs `tell application "Finder" to empty trash` — first call pops a "MacDock wants access to control 'Finder'" consent; Allow empties the whole Trash including com.apple.macl-protected items (verified: 57MB → 0B).
 - Note: rebuilding the adhoc binary invalidates the previous FDA grant (cdhash changes → SystemPolicyAllFiles flips back to 0). Grants must be re-done per build.
+
+### Sparkle updates (devin/sparkle-updates)
+- Footer "Updates" button runs Sparkle's `checkForUpdates` — with an empty/unreachable appcast it shows a benign "Update Error!" dialog (Cancel Update), not a crash.
+- If the menubar icon is hidden by another app's menus (e.g. Simulator running fullscreen menubars), drive the panel via `osascript -e 'tell application "System Events" to tell process "MacDock" to perform action "AXPress" of menu bar item "MenuBarIcon" of menu bar 2'`.
+- Verify Sparkle wiring: `ls Contents/Frameworks/Sparkle.framework` and PlistBuddy `SUFeedURL`/`SUPublicEDKey`.

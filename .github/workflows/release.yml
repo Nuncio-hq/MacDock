@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: MacDock
+  SCHEME: MacDock
+  SPARKLE_VERSION: "2.6.4"
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Import signing certificate
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$DEVELOPER_ID_P12" | base64 --decode > /tmp/cert.p12
+          KEYCHAIN=/tmp/build.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import /tmp/cert.p12 -k "$KEYCHAIN" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          curl -sO https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import AppleWWDRCAG3.cer -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm /tmp/cert.p12
+          security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep -E "Developer ID Application|Apple Distribution" | head -1
+
+      - name: Generate Xcode project and resolve packages
+        run: |
+          xcodegen
+          xcodebuild -resolvePackageDependencies \
+            -project MacDock.xcodeproj -scheme MacDock
+
+      - name: Build Release
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" /tmp/build.keychain-db
+          IDENTITY=$(security find-identity -v -p codesigning /tmp/build.keychain-db \
+            | grep -E "Developer ID Application|Apple Distribution" | head -1 \
+            | sed -E 's/.*"(.*)"/\1/')
+          echo "Signing as: $IDENTITY"
+          xcodegen
+          xcodebuild -project MacDock.xcodeproj -scheme MacDock \
+            -configuration Release -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$IDENTITY" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            OTHER_CODE_SIGN_FLAGS="--timestamp" \
+            clean build
+
+      - name: Sign nested binaries and app bundle
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" /tmp/build.keychain-db
+          APP="build/Build/Products/Release/$APP_NAME.app"
+          IDENTITY=$(security find-identity -v -p codesigning /tmp/build.keychain-db \
+            | grep "Developer ID Application" | head -1 \
+            | sed -E 's/.*"(.*)"/\1/')
+          F="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+          for t in "$F/XPCServices/Downloader.xpc" "$F/XPCServices/Installer.xpc" \
+                   "$F/Updater.app" "$F/Autoupdate" "$F" \
+                   "$APP/Contents/Resources/MacDockScanHelper" "$APP"; do
+            codesign -f -s "$IDENTITY" --keychain /tmp/build.keychain-db \
+              --timestamp -o runtime "$t"
+          done
+          codesign -vvv --deep --strict "$APP"
+
+      - name: Package DMG and ZIP
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release/$APP_NAME.app"
+          mkdir -p dist/dmg-root
+          cp -R "$APP" dist/dmg-root/
+          ln -s /Applications dist/dmg-root/Applications
+          hdiutil create -volname "$APP_NAME" -srcfolder dist/dmg-root \
+            -ov -format UDZO "dist/$APP_NAME.dmg"
+          ditto -c -k --keepParent "$APP" "dist/$APP_NAME.zip"
+
+      - name: Notarize DMG and app ZIP
+        env:
+          NOTARIZATION_API_KEY_P8: ${{ secrets.NOTARIZATION_API_KEY_P8 }}
+          NOTARIZATION_KEY_ID: ${{ secrets.NOTARIZATION_KEY_ID }}
+          NOTARIZATION_ISSUER: ${{ secrets.NOTARIZATION_ISSUER }}
+        run: |
+          set -euo pipefail
+          echo "$NOTARIZATION_API_KEY_P8" | base64 --decode > /tmp/AuthKey.p8
+          xcrun notarytool submit "dist/$APP_NAME.dmg" \
+            --key /tmp/AuthKey.p8 --key-id "$NOTARIZATION_KEY_ID" \
+            --issuer "$NOTARIZATION_ISSUER" --wait
+          xcrun stapler staple "dist/$APP_NAME.dmg"
+          xcrun notarytool submit "dist/$APP_NAME.zip" \
+            --key /tmp/AuthKey.p8 --key-id "$NOTARIZATION_KEY_ID" \
+            --issuer "$NOTARIZATION_ISSUER" --wait
+          rm /tmp/AuthKey.p8
+          # Rebuild the zip with the stapled app for Sparkle
+          xcrun stapler staple "build/Build/Products/Release/$APP_NAME.app" || true
+          ditto -c -k --keepParent \
+            "build/Build/Products/Release/$APP_NAME.app" "dist/$APP_NAME.zip"
+
+      - name: Fetch Sparkle tools
+        run: |
+          curl -sL -o /tmp/sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir -p /tmp/sparkle
+          tar -xf /tmp/sparkle.tar.xz -C /tmp/sparkle
+
+      - name: Create GitHub Release with artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            "dist/$APP_NAME.dmg" "dist/$APP_NAME.zip" \
+            --title "$APP_NAME $TAG" --generate-notes
+
+      - name: Generate and publish appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle-key
+          mkdir -p /tmp/appcast-feed
+          cp "dist/$APP_NAME.zip" /tmp/appcast-feed/
+          /tmp/sparkle/bin/generate_appcast \
+            -s /tmp/sparkle-key \
+            --download-url-prefix \
+            "https://github.com/Nuncio-hq/MacDock/releases/download/$TAG/" \
+            -o appcast.xml /tmp/appcast-feed
+          cat appcast.xml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add appcast.xml
+          git commit -m "appcast: $TAG" || echo "no appcast change"
+          git push origin main
