@@ -8,6 +8,7 @@ final class QuickLookController: NSObject, QLPreviewPanelDataSource, @unchecked 
 
     private var urls: [URL] = []
 
+    @MainActor
     func preview(_ urls: [URL], index: Int = 0) {
         guard !urls.isEmpty else { return }
         self.urls = urls
