@@ -55,3 +55,9 @@ MacDock is an LSUIElement agent: no Dock icon, no windows except the menubar pan
 - Footer "Updates" button runs Sparkle's `checkForUpdates` — with an empty/unreachable appcast it shows a benign "Update Error!" dialog (Cancel Update), not a crash.
 - If the menubar icon is hidden by another app's menus (e.g. Simulator running fullscreen menubars), drive the panel via `osascript -e 'tell application "System Events" to tell process "MacDock" to perform action "AXPress" of menu bar item "MenuBarIcon" of menu bar 2'`.
 - Verify Sparkle wiring: `ls Contents/Frameworks/Sparkle.framework` and PlistBuddy `SUFeedURL`/`SUPublicEDKey`.
+
+### Storage Manager: interaction quirks + AX fallback (worktree build)
+- Release build at `build-release/Build/Products/Release/` may need adhoc re-sign before it runs: `codesign --force --sign - Contents/Frameworks/Sparkle.framework && codesign --force --deep --sign - .` (Team ID mismatch kills launch).
+- If the Storage window renders but clicks do nothing (hit-test shows the right AXCell but no action — happens after other windows steal focus), it stays wedged; either reopen via panel "Open Storage Manager" (openWindow does NSApp.activate) or drive via AX: sidebar = `outline 1 of scroll area 1 of group 1 of splitter group 1 of group 1` (rows 2-5 = Home/HD/admin/Folder); results table = `outline 1 of scroll area 1 of group 2 of splitter group 1 of group 1`; select via `set value of attribute "AXSelected" of row N of o to true`; then ⌫/Return keys reach the window.
+- FSEvents banner: while the screen recorder writes to ~/screencasts the home scan never leaves "Storage is still changing…" — to see the "changed…Refresh" flip, scan a quiet scratch dir and write into it.
+- Deletion guidance is path-prefix matched (DeletionGuidance.swift): dmg/pkg/xip rules only apply inside ~/Downloads AND files only appear in Biggest files which has no guidance footer — file-type guidance is not reachable in the UI.

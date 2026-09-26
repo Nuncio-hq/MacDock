@@ -342,50 +342,57 @@ struct StorageManagerView: View {
             if let id = selection.first,
                let sel = children.first(where: { $0.id == id }) {
                 Divider()
-                let guidance = vm.deletionGuidance(for: sel)
-                VStack(spacing: 7) {
-                    if let message = guidance.message {
-                        HStack(spacing: 7) {
-                            Image(systemName: guidance.safety == .protected
-                                  ? "lock.shield.fill" : "info.circle")
-                                .foregroundStyle(guidance.safety == .protected
-                                                 ? .red : .secondary)
-                            Text(message)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(2)
-                            Spacer()
-                        }
-                    }
-                    HStack(spacing: 12) {
-                        Text(sel.name).font(.callout)
-                            .lineLimit(1).truncationMode(.middle)
-                        Text(Self.fmt(sel.size))
-                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                        Spacer()
-                        Button { vm.reveal(sel) } label: {
-                            Label("Reveal in Finder", systemImage: "folder")
-                        }
-                        if sel.isDirectory {
-                            Button { vm.drill(sel) } label: {
-                                Label("Drill down", systemImage: "arrow.down.right")
-                            }
-                        }
-                        Button(role: .destructive) { vm.stage(sel) } label: {
-                            Label(guidance.safety == .protected ? "Protected" : "Move to Trash",
-                                  systemImage: guidance.safety == .protected
-                                    ? "lock.shield" : "trash")
-                        }
-                        .disabled(guidance.safety == .protected)
-                    }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .padding(.horizontal, 16).padding(.vertical, 8)
+                selectionFooter(sel)
             }
 
             Divider()
             DeleteCollector(vm: vm)
         }
         .overlay { shortcutButtons }
+    }
+
+    /// Selection footer shared by the tree table and biggest-files list:
+    /// one contextual line of guidance (only when it adds something) plus
+    /// Reveal / Drill / Trash actions. Silent by default — DaisyDisk-style.
+    private func selectionFooter(_ sel: DiskNode) -> some View {
+        let guidance = vm.deletionGuidance(for: sel)
+        return VStack(spacing: 7) {
+            if let message = guidance.message {
+                HStack(spacing: 7) {
+                    Image(systemName: guidance.safety == .protected
+                          ? "lock.shield.fill" : "info.circle")
+                        .foregroundStyle(guidance.safety == .protected
+                                         ? .red : .secondary)
+                    Text(message)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                }
+            }
+            HStack(spacing: 12) {
+                Text(sel.name).font(.callout)
+                    .lineLimit(1).truncationMode(.middle)
+                Text(Self.fmt(sel.size))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                Spacer()
+                Button { vm.reveal(sel) } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                if sel.isDirectory {
+                    Button { vm.drill(sel) } label: {
+                        Label("Drill down", systemImage: "arrow.down.right")
+                    }
+                }
+                Button(role: .destructive) { vm.stage(sel) } label: {
+                    Label(guidance.safety == .protected ? "Protected" : "Move to Trash",
+                          systemImage: guidance.safety == .protected
+                            ? "lock.shield" : "trash")
+                }
+                .disabled(guidance.safety == .protected)
+            }
+        }
+        .buttonStyle(.bordered).controlSize(.small)
+        .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
     private func selectedNode() -> DiskNode? {
@@ -470,6 +477,12 @@ struct StorageManagerView: View {
                    let file = vm.biggestFiles.first(where: { $0.id == id }) {
                     quickLook(file)
                 }
+            }
+
+            if let id = selection.first,
+               let sel = vm.biggestFiles.first(where: { $0.id == id }) {
+                Divider()
+                selectionFooter(sel)
             }
 
             Divider()

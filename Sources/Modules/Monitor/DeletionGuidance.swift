@@ -126,6 +126,7 @@ enum DeletionGuide {
             "/private/etc/",
             "/private/var/db/",
             "/private/var/root/",
+            "/private/var/vm/",
         ]
         return prefixes.contains { path.hasPrefix($0) }
     }
