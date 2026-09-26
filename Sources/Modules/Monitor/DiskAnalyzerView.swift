@@ -178,19 +178,20 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
             Task { @MainActor in self?.pollAdminProgress(progressPath) }
         }
 
-        Task.detached { [weak self] in
-            do { try proc.run() } catch {
-                await MainActor.run {
-                    self?.finishAdminScan(outPath: outPath, progressPath: progressPath)
-                    self?.error = "Couldn't start the privileged scan: \(error.localizedDescription)"
-                }
-                return
-            }
-            proc.waitUntilExit()
-            await MainActor.run {
-                self?.finishAdminScan(outPath: outPath, progressPath: progressPath)
+        Task { [weak self] in
+            let launchError = await Self.waitForProcess(proc)
+            self?.finishAdminScan(outPath: outPath, progressPath: progressPath)
+            if let launchError {
+                self?.error = "Couldn't start the privileged scan: \(launchError)"
             }
         }
+    }
+
+    /// Runs a process and waits for it off the main actor.
+    private nonisolated static func waitForProcess(_ p: Process) async -> String? {
+        do { try p.run() } catch { return error.localizedDescription }
+        p.waitUntilExit()
+        return nil
     }
 
     private func pollAdminProgress(_ progressPath: String) {
@@ -280,13 +281,11 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
             KnownSpot(label: "Sleep image & swap (/var/vm)", path: "/private/var/vm"),
         ]
         let paths = spots.map(\.path)
-        Task.detached { [weak self] in
+        Task { [weak self] in
             for (i, path) in paths.enumerated() {
                 let size = await Self.dirSize(path)
-                await MainActor.run {
-                    if let size { self?.spots[i].size = size }
-                    else { self?.spots[i].restricted = true }
-                }
+                if let size { self?.spots[i].size = size }
+                else { self?.spots[i].restricted = true }
             }
         }
         loadSnapshots()
@@ -302,13 +301,14 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
     }
 
     private func loadSnapshots() {
-        Task.detached { [weak self] in
-            let out = Self.runProcess("/usr/bin/tmutil", ["listlocalsnapshots", "/"])
-            let names = out
+        Task { [weak self] in
+            let out = await Task.detached {
+                Self.runProcess("/usr/bin/tmutil", ["listlocalsnapshots", "/"])
+            }.value
+            self?.snapshots = out
                 .split(separator: "\n")
                 .map { String($0).trimmingCharacters(in: .whitespaces) }
                 .filter { $0.hasPrefix("com.apple.TimeMachine") }
-            await MainActor.run { self?.snapshots = names }
         }
     }
 
@@ -423,9 +423,8 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
 
     func refreshTrashSize() {
         let trash = NSHomeDirectory() + "/.Trash"
-        Task.detached { [weak self] in
-            let size = await Self.dirSize(trash) ?? 0
-            await MainActor.run { self?.trashBytes = size }
+        Task { [weak self] in
+            self?.trashBytes = await Self.dirSize(trash) ?? 0
         }
     }
 
@@ -434,47 +433,43 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
     func emptyTrash() {
         guard !emptyingTrash else { return }
         emptyingTrash = true
-        Task.detached { [weak self] in
-            let trash = NSHomeDirectory() + "/.Trash"
-            var failed: String?
-            // Prefer direct removal; items trashed by other apps can carry a
-            // com.apple.macl data ACL that even Full Disk Access can't clear,
-            // so fall back to Finder's own `empty trash`, which always works.
-            if let items = try? FileManager.default.contentsOfDirectory(atPath: trash),
-               items.allSatisfy({
-                   (try? FileManager.default.removeItem(
-                       atPath: trash + "/" + $0)) != nil
-               }) {
-                // emptied directly
+        Task { [weak self] in
+            let failed = await Self.emptyTrashSync()
+            self?.emptyingTrash = false
+            if let failed {
+                self?.error = failed
             } else {
-                let src = "tell application \"Finder\" to empty trash"
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                proc.arguments = ["-e", src]
-                if (try? proc.run()) != nil {
-                    proc.waitUntilExit()
-                    if proc.terminationStatus != 0 {
-                        failed = "Couldn't empty the Trash — grant Full Disk Access "
-                            + "in System Settings → Privacy & Security."
-                    }
-                } else {
-                    failed = "Couldn't empty the Trash — grant Full Disk Access "
-                        + "in System Settings → Privacy & Security."
-                }
+                self?.trashBytes = 0
+                self?.lastFreed = 0
             }
-            await MainActor.run {
-                self?.emptyingTrash = false
-                if let failed {
-                    self?.error = failed
-                } else {
-                    self?.trashBytes = 0
-                    self?.lastFreed = 0
-                }
-                self?.loadVolumeInfo()
-                self?.loadSpots()
-                self?.refreshTrashSize()
-            }
+            self?.loadVolumeInfo()
+            self?.loadSpots()
+            self?.refreshTrashSize()
         }
+    }
+
+    /// Empties ~/.Trash off the main actor: direct removal first, Finder's
+    /// `empty trash` as fallback for macl-protected items.
+    private nonisolated static func emptyTrashSync() async -> String? {
+        let trash = NSHomeDirectory() + "/.Trash"
+        if let items = try? FileManager.default.contentsOfDirectory(atPath: trash),
+           items.allSatisfy({
+               (try? FileManager.default.removeItem(
+                   atPath: trash + "/" + $0)) != nil
+           }) {
+            return nil
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", "tell application \"Finder\" to empty trash"]
+        guard (try? proc.run()) != nil else {
+            return "Couldn't empty the Trash — grant Full Disk Access "
+                + "in System Settings → Privacy & Security."
+        }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0 ? nil
+            : "Couldn't empty the Trash — grant Full Disk Access "
+                + "in System Settings → Privacy & Security."
     }
 
     private func refreshAfterDelete(_ node: DiskNode) {
