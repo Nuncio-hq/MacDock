@@ -33,12 +33,18 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
     /// the expected total is volume used space.
     @Published var scanETA: TimeInterval?
     @Published var adminScanRunning = false
+    @Published var scanCompletedAt: Date?
+    @Published var scanNeedsRefresh = false
+    @Published var changesSettled = false
+    @Published var changedPaths: [String] = []
 
     private var scanTask: Task<Void, Never>?
     private var scanStarted: Date?
     private var scanTarget: String?
     private var adminProcess: Process?
     private var adminProgressTimer: Timer?
+    private var changeMonitor: DiskChangeMonitor?
+    private var changeSettleTask: Task<Void, Never>?
 
     init() { loadVolumeInfo(); loadVolumes() }
 
@@ -113,11 +119,15 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
             self?.current = node
             self?.scanning = false
             self?.biggestFiles = scanner.topFiles()
+            self?.finishScanTracking(path)
         }
     }
 
     private func beginScanUI(_ path: String) {
         scanTask?.cancel()
+        changeMonitor?.stop()
+        changeMonitor = nil
+        changeSettleTask?.cancel()
         adminProcess?.terminate()
         adminProgressTimer?.invalidate()
         adminScanRunning = false
@@ -131,6 +141,10 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
         scanETA = nil
         scanStarted = Date()
         scanTarget = path
+        scanCompletedAt = nil
+        scanNeedsRefresh = false
+        changesSettled = false
+        changedPaths = []
     }
 
     private func updateProgress(_ p: ScanProgress) {
@@ -228,6 +242,7 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
         }
         try? FileManager.default.removeItem(atPath: outPath)
         try? FileManager.default.removeItem(atPath: progressPath)
+        finishScanTracking("/")
     }
 
     private func quoted(_ s: String) -> String {
@@ -358,7 +373,70 @@ final class DiskAnalyzerViewModel: ObservableObject, @unchecked Sendable {
     func stage(_ node: DiskNode) {
         guard collectorPhase == .collecting else { return }
         guard !staged.contains(where: { $0.id == node.id }) else { return }
+        let guidance = DeletionGuide.guidance(for: node)
+        guard guidance.safety != .protected else {
+            error = guidance.message
+            return
+        }
         withAnimation(.spring(response: 0.3)) { staged.append(node) }
+    }
+
+    func deletionGuidance(for node: DiskNode) -> DeletionGuidance {
+        DeletionGuide.guidance(for: node)
+    }
+
+    func rescanLastTarget() {
+        guard let scanTarget else { return }
+        startScan(scanTarget)
+    }
+
+    var changedPathCount: Int { changedPaths.count }
+
+    func didChange(_ node: DiskNode) -> Bool {
+        changedPaths.contains {
+            $0 == node.path
+                || (node.path == "/" ? $0.hasPrefix("/")
+                                     : $0.hasPrefix(node.path + "/"))
+                || node.path.hasPrefix($0 + "/")
+        }
+    }
+
+    private func finishScanTracking(_ path: String) {
+        scanCompletedAt = Date()
+        scanNeedsRefresh = false
+        changesSettled = false
+        changedPaths = []
+        changeMonitor?.stop()
+        changeMonitor = DiskChangeMonitor(path: path) { [weak self] paths in
+            Task { @MainActor in self?.recordChanges(paths) }
+        }
+    }
+
+    private func recordChanges(_ paths: [String]) {
+        guard !scanning else { return }
+        let stagedPaths = Set(staged.map(\.path))
+        let filtered = paths.filter { path in
+            !stagedPaths.contains(path)
+                && !path.hasPrefix(NSHomeDirectory() + "/.Trash/")
+        }
+        guard !filtered.isEmpty else { return }
+
+        scanNeedsRefresh = true
+        changesSettled = false
+        for path in filtered where !changedPaths.contains(path) {
+            changedPaths.append(path)
+        }
+        if changedPaths.count > 50 {
+            changedPaths.removeFirst(changedPaths.count - 50)
+        }
+        loadVolumeInfo()
+
+        changeSettleTask?.cancel()
+        changeSettleTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.changesSettled = true
+        }
     }
 
     func unstage(_ node: DiskNode) {

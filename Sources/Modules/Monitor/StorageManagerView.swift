@@ -114,6 +114,7 @@ struct StorageManagerView: View {
         VStack(spacing: 0) {
             usageBar
             errorBanner
+            refreshBanner
             if vm.scanning {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -206,6 +207,30 @@ struct StorageManagerView: View {
         }
     }
 
+    @ViewBuilder
+    private var refreshBanner: some View {
+        if vm.scanNeedsRefresh {
+            HStack(spacing: 8) {
+                Image(systemName: vm.changesSettled
+                      ? "arrow.triangle.2.circlepath"
+                      : "waveform.path")
+                    .foregroundStyle(Color.accentTeal)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(vm.changesSettled
+                         ? "Storage changed since this scan. Refresh to see the latest sizes."
+                         : "Storage is still changing…")
+                        .font(.caption)
+                }
+                Spacer()
+                Button("Refresh") { vm.rescanLastTarget() }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(!vm.changesSettled)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .background(Color.accentTeal.opacity(0.1))
+        }
+    }
+
     private func results(_ current: DiskNode) -> some View {
         VStack(spacing: 0) {
             if vm.lastFreed > 0 {
@@ -266,6 +291,11 @@ struct StorageManagerView: View {
                             Image(systemName: "lock.fill")
                                 .font(.caption2).foregroundStyle(.orange)
                         }
+                        if vm.didChange(child) {
+                            Circle().fill(Color.accentTeal)
+                                .frame(width: 6, height: 6)
+                                .help("Changed since the scan")
+                        }
                     }
                     .draggable(DraggedNode(child))
                 }
@@ -312,32 +342,57 @@ struct StorageManagerView: View {
             if let id = selection.first,
                let sel = children.first(where: { $0.id == id }) {
                 Divider()
-                HStack(spacing: 12) {
-                    Text(sel.name).font(.callout)
-                        .lineLimit(1).truncationMode(.middle)
-                    Text(Self.fmt(sel.size))
-                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                    Spacer()
-                    Button { vm.reveal(sel) } label: {
-                        Label("Reveal in Finder", systemImage: "folder")
-                    }
-                    if sel.isDirectory {
-                        Button { vm.drill(sel) } label: {
-                            Label("Drill down", systemImage: "arrow.down.right")
-                        }
-                    }
-                    Button(role: .destructive) { vm.stage(sel) } label: {
-                        Label("Move to Trash", systemImage: "trash")
-                    }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .padding(.horizontal, 16).padding(.vertical, 8)
+                selectionFooter(sel)
             }
 
             Divider()
             DeleteCollector(vm: vm)
         }
         .overlay { shortcutButtons }
+    }
+
+    /// Selection footer shared by the tree table and biggest-files list:
+    /// one contextual line of guidance (only when it adds something) plus
+    /// Reveal / Drill / Trash actions. Silent by default — DaisyDisk-style.
+    private func selectionFooter(_ sel: DiskNode) -> some View {
+        let guidance = vm.deletionGuidance(for: sel)
+        return VStack(spacing: 7) {
+            if let message = guidance.message {
+                HStack(spacing: 7) {
+                    Image(systemName: guidance.safety == .protected
+                          ? "lock.shield.fill" : "info.circle")
+                        .foregroundStyle(guidance.safety == .protected
+                                         ? .red : .secondary)
+                    Text(message)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                }
+            }
+            HStack(spacing: 12) {
+                Text(sel.name).font(.callout)
+                    .lineLimit(1).truncationMode(.middle)
+                Text(Self.fmt(sel.size))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                Spacer()
+                Button { vm.reveal(sel) } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                if sel.isDirectory {
+                    Button { vm.drill(sel) } label: {
+                        Label("Drill down", systemImage: "arrow.down.right")
+                    }
+                }
+                Button(role: .destructive) { vm.stage(sel) } label: {
+                    Label(guidance.safety == .protected ? "Protected" : "Move to Trash",
+                          systemImage: guidance.safety == .protected
+                            ? "lock.shield" : "trash")
+                }
+                .disabled(guidance.safety == .protected)
+            }
+        }
+        .buttonStyle(.bordered).controlSize(.small)
+        .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
     private func selectedNode() -> DiskNode? {
@@ -390,6 +445,11 @@ struct StorageManagerView: View {
                         Text(file.name).lineLimit(1).truncationMode(.middle)
                             .strikethrough(vm.isStaged(file))
                             .foregroundStyle(vm.isStaged(file) ? .secondary : .primary)
+                        if vm.didChange(file) {
+                            Circle().fill(Color.accentTeal)
+                                .frame(width: 6, height: 6)
+                                .help("Changed since the scan")
+                        }
                     }
                     .draggable(DraggedNode(file))
                 }
@@ -417,6 +477,12 @@ struct StorageManagerView: View {
                    let file = vm.biggestFiles.first(where: { $0.id == id }) {
                     quickLook(file)
                 }
+            }
+
+            if let id = selection.first,
+               let sel = vm.biggestFiles.first(where: { $0.id == id }) {
+                Divider()
+                selectionFooter(sel)
             }
 
             Divider()
