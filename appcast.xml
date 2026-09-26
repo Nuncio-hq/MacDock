@@ -1,9 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <channel>
-    <title>MacDock</title>
-    <link>https://raw.githubusercontent.com/Nuncio-hq/MacDock/main/appcast.xml</link>
-    <description>MacDock updates</description>
-    <language>en</language>
-  </channel>
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>MacDock</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Fri, 25 Sep 2026 18:43:55 -0700</pubDate>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/Nuncio-hq/MacDock/releases/download/v0.2.0/MacDock.zip" length="2695238" type="application/octet-stream" sparkle:edSignature="ZwCzfVUBHk8rryJXs7nSlaHPKm6b38qtxWPPBUaYW0FLIiC8XVNS2VMjP7BAWnQyrHf3vP7wUljerAeBqEO2DQ=="/>
+        </item>
+    </channel>
 </rss>
